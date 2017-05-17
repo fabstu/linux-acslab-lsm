@@ -61,6 +61,7 @@ int __init security_init(void)
 	capability_add_hooks();
 	yama_add_hooks();
 	loadpin_add_hooks();
+	acslab_add_hooks();
 
 	/*
 	 * Load all the remaining security modules.

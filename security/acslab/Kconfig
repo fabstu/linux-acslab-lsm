@@ -1,0 +1,6 @@
+config SECURITY_ACSLAB
+	bool "ACS-Lab LSM support"
+	depends on SECURITY_PATH
+	default n
+	help
+	  This module contains an exemplary LSM for the ACS-Lab.
