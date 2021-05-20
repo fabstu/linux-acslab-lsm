@@ -1,5 +1,6 @@
 config SECURITY_ACSLAB
 	bool "ACS-Lab LSM support"
+	depends on SECURITY
 	depends on SECURITY_PATH
 	default n
 	help
