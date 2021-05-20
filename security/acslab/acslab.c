@@ -13,6 +13,7 @@
 #include <linux/string.h> // strnstr
 #include <linux/usb.h>	  // USB
 #include <linux/blkdev.h> // block
+#include <linux/sysctl.h> // zero, one
 
 /*** Hook handler definitions ***/
 
@@ -33,70 +34,64 @@ struct device_found
 static int print_usbs(struct usb_device *dev, void *data)
 {
 	struct device_found *result = data;
-	int found;
+	result->counter += match_usb_dev(dev, NULL);
+	return 0;
+}
 
-	found = match_usb_dev(dev, NULL);
-	if (found != 0)
+static int usb_connected(void)
+{
+	int ret_for_each;
+	struct device_found found = {0};
+
+	ret_for_each = usb_for_each_dev(&found, print_usbs);
+	if (ret_for_each != 0)
 	{
-		pr_info("usb device found! - product: %s, manu: %s, vendorID: %d, productID: %d found=%d\n",
-				dev->product, dev->manufacturer, dev->descriptor.idVendor, dev->descriptor.idProduct, found);
-		result->counter += 1;
+		return -EPERM;
 	}
-	else
+
+	if (found.counter != 0)
 	{
-		pr_info("usb device - product: %s, manu: %s, vendorID: %d, productID: %d\n",
-				dev->product, dev->manufacturer, dev->descriptor.idVendor, dev->descriptor.idProduct);
+		return 1;
 	}
 
 	return 0;
 }
 
+struct acs
+{
+	int enforced;
+	int denied_counter;
+};
+
+struct acs acslab = {1, 0};
+
 static int acslab_path_mkdir(const struct path *dir, struct dentry *dentry,
 							 umode_t mode)
 {
-	char buf_dir[256];
-	char buf_path[256];
-	char *ret_dir;
-	char *ret_path;
-	int ret_for_each;
-	struct device_found found = {0};
+	int connected;
 
-	ret_dir = dentry_path(dir->dentry, buf_dir, ARRAY_SIZE(buf_dir));
-	if (IS_ERR(ret_dir))
+	if (acslab.enforced == 0)
 	{
-		pr_info("mkdir hooked: <failed to retrieve directory>\n");
-		return 0;
-	}
-
-	ret_path = dentry_path(dentry, buf_path, ARRAY_SIZE(buf_path));
-	if (IS_ERR(ret_path))
-	{
-		pr_info("mkdir hooked: <failed to retrieve path>\n");
 		return 0;
 	}
 
 	if (strcmp(dentry->d_name.name, "dsn") != 0)
 	{
-		pr_info("mkdir hooked: strlen1=%zu strlen2=%zu dir=%s, path=%s, d_name=%s\n", strlen(ret_dir), strlen(ret_path), ret_dir, ret_path, dentry->d_name.name);
 		return 0;
 	}
 
-	pr_info("mkdir hooked: is dsn, found.counter=%d\n", found.counter);
-
-	ret_for_each = usb_for_each_dev(&found, print_usbs);
-	if (ret_for_each != 0)
+	connected = usb_connected();
+	if (connected != 0 && connected != 1)
 	{
-		pr_err("mkdir hooked: failed to list usb devices\n");
+		pr_err("acslab: checking ubs devices failed");
 		return 0;
 	}
 
-	if (found.counter != 0)
+	if (connected != 0)
 	{
-		pr_info("mkdir hooked: device found: %d\n", found.counter);
 		return 0;
 	}
-
-	pr_info("mkdir hooked: device not found: %d\n", found.counter);
+	acslab.denied_counter += 1;
 	return -EPERM;
 }
 
@@ -114,8 +109,64 @@ static struct security_hook_list acslab_hooks[] = {
 	LSM_HOOK_INIT(settime, acslab_settime),
 };
 
+#ifdef CONFIG_SYSCTL
+static int acslab_dointvec_minmax(struct ctl_table *table, int write,
+								  void __user *buffer, size_t *lenp, loff_t *ppos)
+{
+	// struct ctl_table table_copy;
+
+	if (write)
+		return -EROFS;
+
+	// /* Lock the max value if it ever gets set. */
+	// table_copy = *table;
+	// if (*(int *)table_copy.data == *(int *)table_copy.extra2)
+	// 	table_copy.extra1 = table_copy.extra2;
+
+	return proc_dointvec_minmax(table, write, buffer, lenp, ppos);
+}
+
+struct ctl_path acslab_sysctl_path[] = {
+	{
+		.procname = "kernel",
+	},
+	{
+		.procname = "acslab",
+	},
+	{}};
+
+static int zero = 0;
+static int one = 1;
+
+static struct ctl_table acslab_sysctl_table[] = {
+	{.procname = "enforced",
+	 .data = &acslab.enforced,
+	 .maxlen = sizeof(int),
+	 .mode = 0644,
+	 .proc_handler = proc_dointvec_minmax,
+	 .extra1 = &zero,
+	 .extra2 = &one},
+	{.procname = "denied_counter",
+	 .maxlen = sizeof(int),
+	 .data = &acslab.denied_counter,
+	 .mode = 0444,
+	 .proc_handler = proc_dointvec_minmax},
+	{}};
+
+static void __init acslab_init_sysctl(void)
+{
+	if (!register_sysctl_paths(acslab_sysctl_path, acslab_sysctl_table))
+		panic("acsctl: sysctl registration failed.\n");
+}
+#else
+static inline void acslab_init_sysctl(void)
+{
+}
+#endif /* CONFIG_SYSCTL */
+
 void __init acslab_add_hooks(void)
 {
 	pr_info("Hooks have been added!");
 	security_add_hooks(acslab_hooks, ARRAY_SIZE(acslab_hooks));
+	acslab_init_sysctl();
 }

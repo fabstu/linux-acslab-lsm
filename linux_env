@@ -1,0 +1,2 @@
+export CC="ccache gcc"
+export KBUILD_BUILD_TIMESTAMP=''
